@@ -1,188 +1,160 @@
-# Reliability Architecture: Warm Standby Implementation
+# VPC and Network Architecture Implementation
 
-## Architecture Diagram
+## Detailed Architecture Diagram
 ```
-                                         [Route53]
-                                            |
-                                    DNS Failover Policy
-                                    /                \
-                                   /                  \
-                          Health Checks          Health Checks
-                              |                        |
-                              v                        v
-+------------------------[Primary]----------------+  +----------------------[Standby]------------------+
-|                       US-EAST-1               |  |                     US-WEST-2                   |
-|                           |                   |  |                         |                       |
-|                    API Gateway               |  |                   API Gateway                    |
-|                     [Primary]                |  |                   [Standby]                     |
-|                         |                    |  |                         |                       |
-|                         v                    |  |                         v                       |
-|                 +---------------+            |  |                 +---------------+               |
-|                 |Lambda Function|            |  |                 |Lambda Function|               |
-|                 +---------------+            |  |                 +---------------+               |
-|                         |                    |  |                         |                       |
-|                         v                    |  |                         v                       |
-|              +-----------------+            |  |              +-----------------+                |
-|              |   Primary RDS   |------------+--+------------->|  Standby RDS    |                |
-|              | (Active/Master) |            |  |              | (Warm Standby)  |                |
-|              +-----------------+            |  |              +-----------------+                |
-|                         ^                    |  |                         ^                       |
-|                         |                    |  |                         |                       |
-|              +-----------------+            |  |              +-----------------+                |
-|              |  Primary S3     |------------+--+------------->|  Standby S3     |                |
-|              |   (Active)      |  Replication  |              |  (Replica)      |                |
-|              +-----------------+            |  |              +-----------------+                |
-|                                            |  |                                                 |
-|           CloudWatch Alarms                |  |            CloudWatch Alarms                    |
-|           Health Metrics                   |  |            Health Metrics                       |
-+-------------------------------------------|  |------------------------------------------------+
-```
-
-## Component Details
-
-### 1. DNS and Routing Layer
-- **Route53 DNS Failover**
-  - Primary endpoint: `api.project3.com` → US-EAST-1
-  - Standby endpoint: `api-standby.project3.com` → US-WEST-2
-  - Health check interval: 30 seconds
-  - Failure threshold: 3 consecutive failures
-  - Monitored endpoint: `/contact` (HTTPS/443)
-
-### 2. Primary Region (US-EAST-1)
-- **API Gateway**
-  - Production traffic handling
-  - Full capacity deployment
-  - HTTPS endpoints with WAF protection
-  
-- **Lambda Functions**
-  - Auto-scaling enabled
-  - Production configuration
-  - Full monitoring and logging
-
-- **RDS Database (Primary)**
-  - Instance Type: Production grade
-  - Multi-AZ deployment
-  - Automated backups enabled
-  - Performance Insights enabled
-  - Enhanced monitoring
-
-- **S3 Bucket (Primary)**
-  - Version control enabled
-  - Cross-region replication configured
-  - Origin for CloudFront distribution
-  - Encryption at rest
-
-### 3. Standby Region (US-WEST-2)
-- **API Gateway**
-  - Scaled-down configuration
-  - Ready to handle failover traffic
-  - Identical API structure to primary
-
-- **Lambda Functions**
-  - Minimal cold starts maintained
-  - Identical code to primary region
-  - Scaled-down concurrency
-
-- **RDS Database (Standby)**
-  - Warm standby configuration
-  - Read replica from primary
-  - Can be promoted to master
-  - Scaled-down instance type
-
-- **S3 Bucket (Standby)**
-  - Replication target from primary
-  - Versioning enabled
-  - Ready for failover
-
-### 4. Monitoring and Alerting
-- **CloudWatch Alarms**
-  - Database performance metrics
-  - API latency monitoring
-  - Error rate tracking
-  - Resource utilization
-
-- **Health Checks**
-  - Endpoint availability monitoring
-  - Latency tracking
-  - SSL certificate validation
-  - Custom health check responses
-
-## Failover Process
-
-1. **Detection Phase**
-   - Route53 health checks detect primary region failure
-   - Three consecutive failed checks trigger failover
-   - CloudWatch alarms activated
-
-2. **DNS Failover**
-   - Route53 automatically updates DNS records
-   - Traffic redirected to standby region
-   - TTL set to 60 seconds for quick propagation
-
-3. **Standby Activation**
-   - Standby RDS promoted to master if needed
-   - API Gateway capacity increased
-   - Lambda concurrency limits adjusted
-   - S3 bucket becomes primary
-
-4. **Validation**
-   - Health checks confirm standby availability
-   - CloudWatch metrics monitored
-   - Application logs verified
-   - Database replication status confirmed
-
-## Recovery Process
-
-1. **Primary Region Recovery**
-   - Verify primary region services
-   - Resync data from standby
-   - Validate system integrity
-
-2. **Traffic Restoration**
-   - Health checks re-enabled for primary
-   - DNS failback initiated
-   - Monitor traffic migration
-
-3. **Standby Reset**
-   - Re-establish replication
-   - Scale down standby resources
-   - Verify backup configurations
-
-## Testing and Maintenance
-
-### Regular Testing
-- Monthly failover drills
-- Data consistency validation
-- Performance benchmarking
-- Recovery time objectives (RTO) validation
-
-### Maintenance Procedures
-- Regular updates to both regions
-- Capacity planning reviews
-- Security patch management
-- Configuration synchronization
-
-## Cost Optimization
-
-- Standby region runs at reduced capacity
-- Auto-scaling policies for cost control
-- Reserved instances for predictable workloads
-- Regular cost analysis and optimization
-
-## Security Considerations
-
-- Cross-region IAM policies
-- Encryption in transit and at rest
-- Security group synchronization
-- SSL/TLS certificate management
-- WAF rules replication
-
-## Documentation and Runbooks
-
-- Failover procedures
-- Recovery checklists
-- Monitoring guidelines
-- Incident response plans
-- Contact information for key personnel
+                                    AWS Cloud
+                                 [Route 53 DNS]
+                                       |
+                    Active DNS         |        Failover DNS
+                         +-------------)------------+
+                         |                         |
+            Primary Region (US-EAST-1)    Standby Region (US-WEST-2)
+         +-------------------------+    +-------------------------+
+         |        VPC             |    |         VPC            |
+         |  +------------------+  |    |  +------------------+  |
+         |  | Availability Zone|  |    |  | Availability Zone|  |
+         |  |    +--------+    |  |    |  |    +--------+    |  |
+         |  |    |  API   |    |  |    |  |    |  API   |    |  |
+         |  |    |Gateway |    |  |    |  |    |Gateway |    |  |
+         |  |    +--------+    |  |    |  |    +--------+    |  |
+         |  |         |        |  |    |  |         |        |  |
+         |  | +---------------+|  |    |  | +---------------+|  |
+         |  | |Auto Scaling   ||  |    |  | |Auto Scaling   ||  |
+         |  | |Group          ||  |    |  | |Group          ||  |
+         |  | |  +--------+   ||  |    |  | |  +--------+   ||  |
+         |  | |  |Lambda  |   ||  |    |  | |  |Lambda  |   ||  |
+         |  | |  |Function|   ||  |    |  | |  |Function|   ||  |
+         |  | |  +--------+   ||  |    |  | |  +--------+   ||  |
+         |  | +---------------+|  |    |  | +---------------+|  |
+         |  |         |        |  |    |  |         |        |  |
+         |  |    +---------+   |  |    |  |    +---------+   |  |
+         |  |    | Aurora  |   |  |    |  |    | Aurora  |   |  |
+         |  |    | Primary |<--|--|----|----|----| Replica|   |  |
+         |  |    +---------+   |  |    |  |    +---------+   |  |
+         |  |         |        |  |    |  |         |        |  |
+         |  |    +---------+   |  |    |  |    +---------+   |  |
+         |  |    |   S3    |   |  |    |  |    |   S3    |   |  |
+         |  |    | Primary |<--|--|----|----|----| Replica|   |  |
+         |  |    +---------+   |  |    |  |    +---------+   |  |
+         |  +------------------+  |    |  +------------------+  |
+         +-------------------------+    +-------------------------+
+                      |                              |
+                      |         CloudWatch           |
+                      +--------- Monitoring ---------+
+                      |          Alarms             |
+                      +----------------------------->
 
 ```
+
+## Network Connections and Data Flow
+
+### Primary Region (US-EAST-1)
+
+1. **VPC Configuration**
+   - Default VPC used (as per your configuration)
+   - Security groups configured for internal communication
+   - Private subnets for RDS and Lambda
+   - Public subnets for API Gateway
+
+2. **Network Flow**
+   ```
+   Internet → Route 53 → API Gateway → Lambda → Aurora Primary
+                                              ↓
+                                         S3 Primary
+   ```
+
+3. **Security Group Configuration**
+   ```hcl
+   RDS Security Group:
+   - Inbound: Port 5432 from Lambda SG
+   - Outbound: All traffic allowed
+   
+   Lambda Security Group:
+   - Outbound: Port 5432 to RDS SG
+   - Outbound: HTTPS to internet (443)
+   ```
+
+### Standby Region (US-WEST-2)
+
+1. **VPC Configuration**
+   - Mirror of primary region VPC
+   - Scaled-down but identical security configuration
+   - Same subnet structure as primary
+
+2. **Network Flow**
+   ```
+   (During Failover)
+   Internet → Route 53 → API Gateway → Lambda → Aurora Replica
+                                              ↓
+                                         S3 Replica
+   ```
+
+### Cross-Region Connections
+
+1. **Database Replication**
+   ```
+   Aurora Primary -----> Aurora Replica
+   (Asynchronous Cross-Region Replication)
+   ```
+
+2. **S3 Replication**
+   ```
+   S3 Primary -----> S3 Replica
+   (Cross-Region Replication)
+   ```
+
+3. **Route 53 Health Checks**
+   ```
+   Route 53 ---> Primary Endpoint (Active)
+           ---> Standby Endpoint (Passive)
+   ```
+
+## Component Placement
+
+### Inside VPC
+- API Gateway (Regional endpoint)
+- Lambda Functions (in private subnets)
+- Aurora Database (in private subnets)
+- Security Groups
+- Network ACLs
+
+### Outside VPC but in Region
+- S3 Buckets (global service but region-specific)
+- CloudWatch Logs
+- CloudWatch Alarms
+
+### Global Services
+- Route 53 DNS
+- CloudFront (if used)
+- IAM Roles and Policies
+
+## Network Security Layers
+
+1. **VPC Level**
+   - Network ACLs
+   - Subnet segregation
+   - Internet Gateway configuration
+
+2. **Component Level**
+   - Security Groups
+   - IAM Roles
+   - Service endpoints
+
+3. **Application Level**
+   - API Gateway authentication
+   - Lambda security context
+   - Database encryption
+
+## Failover Network Path
+
+1. **Normal Operation**
+   ```
+   User → Route 53 → Primary API Gateway → Primary Lambda → Primary Aurora
+   ```
+
+2. **During Failover**
+   ```
+   User → Route 53 → Standby API Gateway → Standby Lambda → Aurora Replica
+   ```
+
+This architecture follows AWS best practices for high availability and disaster recovery, with clear network boundaries and security zones, similar to the reference diagram you provided. Each component is placed in the appropriate network tier with proper security controls and replication paths.
