@@ -1,9 +1,10 @@
-# VPC and Network Architecture Implementation
+# Project3 VPC and Network Architecture (Actual Implementation)
 
-## Detailed Architecture Diagram
+## Current Architecture Diagram
 ```
                                     AWS Cloud
                                  [Route 53 DNS]
+                                 Health Checks
                                        |
                     Active DNS         |        Failover DNS
                          +-------------)------------+
@@ -18,23 +19,20 @@
          |  |    |Gateway |    |  |    |  |    |Gateway |    |  |
          |  |    +--------+    |  |    |  |    +--------+    |  |
          |  |         |        |  |    |  |         |        |  |
-         |  | +---------------+|  |    |  | +---------------+|  |
-         |  | |Auto Scaling   ||  |    |  | |Auto Scaling   ||  |
-         |  | |Group          ||  |    |  | |Group          ||  |
-         |  | |  +--------+   ||  |    |  | |  +--------+   ||  |
-         |  | |  |Lambda  |   ||  |    |  | |  |Lambda  |   ||  |
-         |  | |  |Function|   ||  |    |  | |  |Function|   ||  |
-         |  | |  +--------+   ||  |    |  | |  +--------+   ||  |
-         |  | +---------------+|  |    |  | +---------------+|  |
+         |  |    +--------+    |  |    |  |    +--------+    |  |
+         |  |    | Lambda |    |  |    |  |    | Lambda |    |  |
+         |  |    |Function|    |  |    |  |    |Function|    |  |
+         |  |    +--------+    |  |    |  |    +--------+    |  |
          |  |         |        |  |    |  |         |        |  |
          |  |    +---------+   |  |    |  |    +---------+   |  |
-         |  |    | Aurora  |   |  |    |  |    | Aurora  |   |  |
-         |  |    | Primary |<--|--|----|----|----| Replica|   |  |
+         |  |    |Postgres |   |  |    |  |    |Postgres |   |  |
+         |  |    |  RDS    |<--|--|----|----|----| RDS    |   |  |
+         |  |    | Primary |   |  |    |  |    |Standby  |   |  |
          |  |    +---------+   |  |    |  |    +---------+   |  |
          |  |         |        |  |    |  |         |        |  |
          |  |    +---------+   |  |    |  |    +---------+   |  |
          |  |    |   S3    |   |  |    |  |    |   S3    |   |  |
-         |  |    | Primary |<--|--|----|----|----| Replica|   |  |
+         |  |    | Bucket  |<--|--|----|----|----| Bucket |   |  |
          |  |    +---------+   |  |    |  |    +---------+   |  |
          |  +------------------+  |    |  +------------------+  |
          +-------------------------+    +-------------------------+
@@ -46,115 +44,106 @@
 
 ```
 
-## Network Connections and Data Flow
+## Actual Component Details (From Your Infrastructure)
 
 ### Primary Region (US-EAST-1)
 
 1. **VPC Configuration**
-   - Default VPC used (as per your configuration)
-   - Security groups configured for internal communication
-   - Private subnets for RDS and Lambda
-   - Public subnets for API Gateway
-
-2. **Network Flow**
-   ```
-   Internet → Route 53 → API Gateway → Lambda → Aurora Primary
-                                              ↓
-                                         S3 Primary
-   ```
-
-3. **Security Group Configuration**
    ```hcl
-   RDS Security Group:
-   - Inbound: Port 5432 from Lambda SG
-   - Outbound: All traffic allowed
-   
-   Lambda Security Group:
-   - Outbound: Port 5432 to RDS SG
-   - Outbound: HTTPS to internet (443)
+   # From your actual configuration
+   data "aws_vpc" "default" {
+     default = true
+   }
    ```
+
+2. **RDS Configuration**
+   ```hcl
+   # From your infra/modules/rds/main.tf
+   Security Group:
+   - Inbound: Port 5432 from Lambda
+   - Engine: PostgreSQL
+   - Enhanced Monitoring: Enabled
+   - Multi-AZ: Yes
+   ```
+
+3. **Lambda & API Gateway**
+   - API Gateway endpoints for contact form
+   - Lambda functions for processing
+   - Security group access to RDS
+
+4. **S3 Configuration**
+   - Website hosting bucket
+   - Cross-region replication enabled
 
 ### Standby Region (US-WEST-2)
 
 1. **VPC Configuration**
-   - Mirror of primary region VPC
-   - Scaled-down but identical security configuration
-   - Same subnet structure as primary
-
-2. **Network Flow**
-   ```
-   (During Failover)
-   Internet → Route 53 → API Gateway → Lambda → Aurora Replica
-                                              ↓
-                                         S3 Replica
+   ```hcl
+   # From your infra/modules/rds-standby/main.tf
+   data "aws_vpc" "standby" {
+     provider = aws.standby
+     default  = true
+   }
    ```
 
-### Cross-Region Connections
-
-1. **Database Replication**
-   ```
-   Aurora Primary -----> Aurora Replica
-   (Asynchronous Cross-Region Replication)
-   ```
-
-2. **S3 Replication**
-   ```
-   S3 Primary -----> S3 Replica
-   (Cross-Region Replication)
+2. **RDS Standby Configuration**
+   ```hcl
+   # From your actual standby configuration
+   - Engine: PostgreSQL
+   - Multi-AZ: No (cost optimization)
+   - Backup Retention: 7 days
+   - Storage: GP2
+   - Publicly Accessible: No
    ```
 
-3. **Route 53 Health Checks**
+3. **Route 53 Failover**
+   ```hcl
+   # From your route53/failover.tf
+   - Health check on /contact endpoint
+   - 30-second intervals
+   - 3 failure threshold
+   - Failover routing policy
    ```
-   Route 53 ---> Primary Endpoint (Active)
-           ---> Standby Endpoint (Passive)
-   ```
 
-## Component Placement
+## Network Security Implementation
 
-### Inside VPC
-- API Gateway (Regional endpoint)
-- Lambda Functions (in private subnets)
-- Aurora Database (in private subnets)
-- Security Groups
-- Network ACLs
+### Security Groups
+```hcl
+# From your actual configuration
+RDS Security Group:
+- Inbound Rule:
+  - Port: 5432
+  - Source: Lambda Security Group
+  - Protocol: TCP
 
-### Outside VPC but in Region
-- S3 Buckets (global service but region-specific)
-- CloudWatch Logs
-- CloudWatch Alarms
+- Outbound Rule:
+  - All Traffic
+  - Destination: 0.0.0.0/0
+```
 
-### Global Services
-- Route 53 DNS
-- CloudFront (if used)
-- IAM Roles and Policies
-
-## Network Security Layers
-
-1. **VPC Level**
-   - Network ACLs
-   - Subnet segregation
-   - Internet Gateway configuration
-
-2. **Component Level**
-   - Security Groups
-   - IAM Roles
-   - Service endpoints
-
-3. **Application Level**
-   - API Gateway authentication
-   - Lambda security context
-   - Database encryption
-
-## Failover Network Path
+## Failover Process
 
 1. **Normal Operation**
    ```
-   User → Route 53 → Primary API Gateway → Primary Lambda → Primary Aurora
+   User → Route 53 → Primary API Gateway → Lambda → RDS Primary
    ```
 
 2. **During Failover**
    ```
-   User → Route 53 → Standby API Gateway → Standby Lambda → Aurora Replica
+   User → Route 53 → Standby API Gateway → Lambda → RDS Standby
    ```
 
-This architecture follows AWS best practices for high availability and disaster recovery, with clear network boundaries and security zones, similar to the reference diagram you provided. Each component is placed in the appropriate network tier with proper security controls and replication paths.
+## Monitoring Setup
+
+### CloudWatch Configuration
+- RDS performance metrics
+- API Gateway metrics
+- Lambda execution metrics
+- Route 53 health check status
+
+This architecture diagram and documentation now accurately reflects your actual project components and configuration, specifically:
+- PostgreSQL RDS instead of Aurora
+- Your actual security group configurations
+- Your specific Route 53 setup
+- Your actual VPC configuration using default VPCs
+- The exact monitoring and failover setup from your code
